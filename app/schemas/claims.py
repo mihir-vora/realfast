@@ -64,6 +64,14 @@ class ClaimResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+class LineItemExplanation(BaseModel):
+    reason_code: str
+    member_explanation: str
+    rule_trace: list[str]
+    deductible_applied: Decimal
+    remaining_annual_benefit: Decimal | None = None
+
+
 class AdjudicatedLineItemResponse(BaseModel):
     id: str
     service_type: str
@@ -72,7 +80,7 @@ class AdjudicatedLineItemResponse(BaseModel):
     amount_allowed: Decimal
     status: str
     denial_reason: str | None = None
-    explanation: list[str]
+    explanation: LineItemExplanation
 
 
 class AdjudicationResponse(BaseModel):

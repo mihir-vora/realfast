@@ -14,6 +14,7 @@ from app.schemas.claims import (
     AdjudicationResponse,
     ClaimResponse,
     ClaimSubmitRequest,
+    LineItemExplanation,
     LineItemResponse,
 )
 from app.services.claims import (
@@ -101,7 +102,13 @@ def adjudicate_claim(
                 amount_allowed=li.amount_allowed,
                 status=li.status.value,
                 denial_reason=li.denial_reason,
-                explanation=list(results_by_id[li.id].explanation),
+                explanation=LineItemExplanation(
+                    reason_code=results_by_id[li.id].explanation.reason_code,
+                    member_explanation=results_by_id[li.id].explanation.member_explanation,
+                    rule_trace=list(results_by_id[li.id].explanation.rule_trace),
+                    deductible_applied=results_by_id[li.id].explanation.deductible_applied,
+                    remaining_annual_benefit=results_by_id[li.id].explanation.remaining_annual_benefit,
+                ),
             )
             for li in outcome.claim.line_items
         ],

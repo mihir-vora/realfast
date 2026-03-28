@@ -201,7 +201,7 @@ class TestDeductible:
         # $100 < $500 deductible → entire amount goes to deductible
         assert result.status == LineItemStatus.APPROVED
         assert result.amount_allowed == Decimal("0")
-        assert any("deductible" in s.lower() for s in result.explanation)
+        assert any("deductible" in s.lower() for s in result.explanation.rule_trace)
 
     def test_deductible_already_partially_met(self):
         li = _line_item(amount="300.00")
@@ -243,7 +243,7 @@ class TestPerVisitLimit:
         )
         # 80% of $500 = $400, but per-visit limit caps at $150
         assert result.amount_allowed == Decimal("150.00")
-        assert any("per-visit" in s.lower() for s in result.explanation)
+        assert any("per-visit" in s.lower() for s in result.explanation.rule_trace)
 
     def test_payout_below_per_visit_limit_not_capped(self):
         li = _line_item(amount="100.00")
@@ -270,7 +270,7 @@ class TestAnnualLimit:
         # 80% of $500 = $400, but only $200 remaining in annual limit
         assert result.amount_allowed == Decimal("200.00")
         assert svc_acc.amount_used == Decimal("1000.00")
-        assert any("annual limit" in s.lower() for s in result.explanation)
+        assert any("annual limit" in s.lower() for s in result.explanation.rule_trace)
 
     def test_annual_limit_exhausted_means_denied(self):
         li = _line_item(amount="200.00")
@@ -453,25 +453,73 @@ class TestAdjudicateClaim:
 
 
 class TestExplanations:
-    def test_approved_has_explanation_steps(self):
+    """Structured explanation quality checks."""
+
+    def test_approved_has_reason_code(self):
         li = _line_item(amount="200.00")
         result = adjudicate_line_item(
             li, rule=_rule(), policy=_policy(),
             deductible_acc=_deductible_acc(), service_acc=_service_acc(),
         )
-        assert len(result.explanation) >= 2
-        assert any("billed" in s.lower() for s in result.explanation)
-        assert any("plan pays" in s.lower() for s in result.explanation)
+        assert result.explanation.reason_code == "APPROVED"
 
-    def test_denied_has_clear_reason(self):
+    def test_approved_has_rule_trace(self):
+        li = _line_item(amount="200.00")
+        result = adjudicate_line_item(
+            li, rule=_rule(), policy=_policy(),
+            deductible_acc=_deductible_acc(), service_acc=_service_acc(),
+        )
+        assert len(result.explanation.rule_trace) >= 2
+        assert any("billed" in s.lower() for s in result.explanation.rule_trace)
+        assert any("plan pays" in s.lower() for s in result.explanation.rule_trace)
+
+    def test_approved_has_member_explanation(self):
+        li = _line_item(amount="200.00")
+        result = adjudicate_line_item(
+            li, rule=_rule(), policy=_policy(),
+            deductible_acc=_deductible_acc(), service_acc=_service_acc(),
+        )
+        assert "approved" in result.explanation.member_explanation.lower()
+        assert "$160.00" in result.explanation.member_explanation
+
+    def test_denied_not_covered_has_reason_code(self):
         li = _line_item(service_type=ServiceType.EMERGENCY)
         result = adjudicate_line_item(
             li, rule=None, policy=_policy(),
             deductible_acc=_deductible_acc(), service_acc=_service_acc(),
         )
-        assert result.denial_reason is not None
-        assert "EMERGENCY" in result.denial_reason
-        assert "not covered" in result.denial_reason
+        assert result.explanation.reason_code == "NOT_COVERED"
+        assert "not covered" in result.explanation.member_explanation.lower()
+
+    def test_denied_excluded_has_reason_code(self):
+        li = _line_item()
+        result = adjudicate_line_item(
+            li, rule=_rule(is_covered=False), policy=_policy(),
+            deductible_acc=_deductible_acc(), service_acc=_service_acc(),
+        )
+        assert result.explanation.reason_code == "EXCLUDED"
+        assert "excluded" in result.explanation.member_explanation.lower()
+
+    def test_deductible_only_has_reason_code(self):
+        li = _line_item(amount="100.00")
+        policy = _policy(annual_deductible=Decimal("500.00"))
+        result = adjudicate_line_item(
+            li, rule=_rule(), policy=policy,
+            deductible_acc=_deductible_acc(), service_acc=_service_acc(),
+        )
+        assert result.explanation.reason_code == "DEDUCTIBLE_ONLY"
+        assert result.explanation.deductible_applied == Decimal("100.00")
+        assert "deductible" in result.explanation.member_explanation.lower()
+
+    def test_annual_limit_exhausted_has_reason_code(self):
+        li = _line_item(amount="200.00")
+        result = adjudicate_line_item(
+            li, rule=_rule(annual_limit=Decimal("500.00")), policy=_policy(),
+            deductible_acc=_deductible_acc(),
+            service_acc=_service_acc(used="500.00"),
+        )
+        assert result.explanation.reason_code == "ANNUAL_LIMIT_EXHAUSTED"
+        assert result.explanation.remaining_annual_benefit == Decimal("0")
 
     def test_deductible_explanation_shows_progress(self):
         li = _line_item(amount="300.00")
@@ -480,11 +528,38 @@ class TestExplanations:
             li, rule=_rule(), policy=policy,
             deductible_acc=_deductible_acc(used="100.00"), service_acc=_service_acc(),
         )
-        # Find the main deductible step (the one showing member pays X)
-        ded_step = [s for s in result.explanation if "member pays" in s.lower()]
+        ded_step = [s for s in result.explanation.rule_trace if "member pays" in s.lower()]
         assert len(ded_step) == 1
         assert "$400.00" in ded_step[0]  # $100 existing + $300 applied = $400 met
         assert "$500.00" in ded_step[0]  # of $500 total
+
+    def test_deductible_applied_tracked(self):
+        li = _line_item(amount="600.00")
+        policy = _policy(annual_deductible=Decimal("500.00"))
+        result = adjudicate_line_item(
+            li, rule=_rule(), policy=policy,
+            deductible_acc=_deductible_acc(), service_acc=_service_acc(),
+        )
+        assert result.explanation.deductible_applied == Decimal("500.00")
+
+    def test_remaining_annual_benefit_tracked(self):
+        li = _line_item(amount="200.00")
+        result = adjudicate_line_item(
+            li, rule=_rule(annual_limit=Decimal("1000.00")),
+            policy=_policy(),
+            deductible_acc=_deductible_acc(), service_acc=_service_acc(),
+        )
+        # 80% of $200 = $160 approved, $1000 - $160 = $840 remaining
+        assert result.explanation.remaining_annual_benefit == Decimal("840.00")
+
+    def test_no_annual_limit_means_no_remaining_benefit(self):
+        li = _line_item(amount="200.00")
+        result = adjudicate_line_item(
+            li, rule=_rule(annual_limit=Decimal("0")),
+            policy=_policy(),
+            deductible_acc=_deductible_acc(), service_acc=_service_acc(),
+        )
+        assert result.explanation.remaining_annual_benefit is None
 
 
 # ===================================================================

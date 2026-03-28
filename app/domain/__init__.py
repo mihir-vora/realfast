@@ -9,6 +9,7 @@ from app.domain.entities import (  # noqa: F401
     Claim,
     ClaimLineItem,
     CoverageRule,
+    DecisionExplanation,
     InvalidTransitionError,
     Member,
     Policy,

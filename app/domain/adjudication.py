@@ -27,6 +27,7 @@ from app.domain.entities import (
     Claim,
     ClaimLineItem,
     CoverageRule,
+    DecisionExplanation,
     Policy,
 )
 from app.domain.enums import ClaimStatus, LineItemStatus, ServiceType
@@ -58,7 +59,8 @@ def adjudicate_line_item(
 
     This is the heart of the system. Each step either reduces the payable
     amount or denies the item outright. Every decision is recorded in the
-    explanation list so the member can see exactly what happened.
+    rule_trace so reviewers can see exactly what happened, and a separate
+    member_explanation gives a plain-English summary.
 
     Args:
         line_item: The line item to adjudicate.
@@ -70,32 +72,42 @@ def adjudicate_line_item(
     Returns:
         An immutable AdjudicationResult with status, amount, and explanation.
     """
+    svc = line_item.service_type.value
     charged = line_item.amount_charged
     steps: list[str] = []
+    ded_applied = Decimal("0")
 
     # -- Step 1: Coverage check ------------------------------------------------
 
     if rule is None:
-        reason = f"{line_item.service_type.value} is not covered under this policy"
+        reason = f"{svc} is not covered under this policy"
         return AdjudicationResult(
             line_item_id=line_item.id,
             status=LineItemStatus.DENIED,
             amount_allowed=Decimal("0"),
             denial_reason=reason,
-            explanation=(reason,),
+            explanation=DecisionExplanation(
+                reason_code="NOT_COVERED",
+                member_explanation=f"{svc} is not covered by your plan.",
+                rule_trace=(reason,),
+            ),
         )
 
     if not rule.is_covered:
-        reason = f"{line_item.service_type.value} is explicitly excluded from coverage"
+        reason = f"{svc} is explicitly excluded from coverage"
         return AdjudicationResult(
             line_item_id=line_item.id,
             status=LineItemStatus.DENIED,
             amount_allowed=Decimal("0"),
             denial_reason=reason,
-            explanation=(reason,),
+            explanation=DecisionExplanation(
+                reason_code="EXCLUDED",
+                member_explanation=f"{svc} is excluded from your coverage.",
+                rule_trace=(reason,),
+            ),
         )
 
-    steps.append(f"Billed {_fmt(charged)} for {line_item.service_type.value}")
+    steps.append(f"Billed {_fmt(charged)} for {svc}")
 
     payable = charged
 
@@ -116,11 +128,26 @@ def adjudicate_line_item(
                 steps.append(
                     f"Entire amount applied to deductible — plan pays {_fmt(Decimal('0'))}"
                 )
+                remaining_benefit = (
+                    service_acc.remaining(rule.annual_limit)
+                    if rule.annual_limit > 0 else None
+                )
                 return AdjudicationResult(
                     line_item_id=line_item.id,
                     status=LineItemStatus.APPROVED,
                     amount_allowed=Decimal("0"),
-                    explanation=tuple(steps),
+                    explanation=DecisionExplanation(
+                        reason_code="DEDUCTIBLE_ONLY",
+                        member_explanation=(
+                            f"Your entire charge of {_fmt(charged)} was applied to "
+                            f"your annual deductible. You have "
+                            f"{_fmt(deductible_acc.remaining(policy.annual_deductible))} "
+                            f"remaining on your {_fmt(policy.annual_deductible)} deductible."
+                        ),
+                        rule_trace=tuple(steps),
+                        deductible_applied=ded_applied,
+                        remaining_annual_benefit=remaining_benefit,
+                    ),
                 )
 
     # -- Step 3: Coinsurance ---------------------------------------------------
@@ -146,7 +173,7 @@ def adjudicate_line_item(
         if remaining_limit <= 0:
             reason = (
                 f"Annual limit of {_fmt(rule.annual_limit)} for "
-                f"{line_item.service_type.value} exhausted "
+                f"{svc} exhausted "
                 f"({_fmt(service_acc.amount_used)} of {_fmt(rule.annual_limit)} used)"
             )
             steps.append(reason)
@@ -155,7 +182,16 @@ def adjudicate_line_item(
                 status=LineItemStatus.DENIED,
                 amount_allowed=Decimal("0"),
                 denial_reason=reason,
-                explanation=tuple(steps),
+                explanation=DecisionExplanation(
+                    reason_code="ANNUAL_LIMIT_EXHAUSTED",
+                    member_explanation=(
+                        f"Your annual {svc} benefit of {_fmt(rule.annual_limit)} "
+                        f"has been fully used for this year."
+                    ),
+                    rule_trace=tuple(steps),
+                    deductible_applied=ded_applied,
+                    remaining_annual_benefit=Decimal("0"),
+                ),
             )
 
         if plan_pays > remaining_limit:
@@ -172,11 +208,34 @@ def adjudicate_line_item(
 
     steps.append(f"Plan pays: {_fmt(plan_pays)}")
 
+    remaining_benefit = (
+        service_acc.remaining(rule.annual_limit)
+        if rule.annual_limit > 0 else None
+    )
+
+    # Build a member-friendly summary
+    parts: list[str] = []
+    parts.append(f"Your plan approved {_fmt(plan_pays)} of the {_fmt(charged)} charge.")
+    if ded_applied > 0:
+        parts.append(
+            f"{_fmt(ded_applied)} was applied to your deductible."
+        )
+    if remaining_benefit is not None:
+        parts.append(
+            f"You have {_fmt(remaining_benefit)} remaining in your annual {svc} benefit."
+        )
+
     return AdjudicationResult(
         line_item_id=line_item.id,
         status=LineItemStatus.APPROVED,
         amount_allowed=plan_pays,
-        explanation=tuple(steps),
+        explanation=DecisionExplanation(
+            reason_code="APPROVED",
+            member_explanation=" ".join(parts),
+            rule_trace=tuple(steps),
+            deductible_applied=ded_applied,
+            remaining_annual_benefit=remaining_benefit,
+        ),
     )
 
 

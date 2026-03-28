@@ -6,6 +6,7 @@ from app.schemas.claims import (  # noqa: F401
     AdjudicationResponse,
     ClaimResponse,
     ClaimSubmitRequest,
+    LineItemExplanation,
     LineItemRequest,
     LineItemResponse,
 )

@@ -247,6 +247,24 @@ class Accumulator:
 
 
 @dataclass(frozen=True)
+class DecisionExplanation:
+    """Structured explanation for an adjudication decision.
+
+    Two audiences:
+        - member_explanation: plain-English for the insured person
+        - rule_trace: step-by-step processing log for internal reviewers
+
+    Includes financial context so callers don't have to recompute.
+    """
+
+    reason_code: str
+    member_explanation: str
+    rule_trace: tuple[str, ...]
+    deductible_applied: Decimal = Decimal("0")
+    remaining_annual_benefit: Optional[Decimal] = None
+
+
+@dataclass(frozen=True)
 class AdjudicationResult:
     """The outcome of adjudicating a single line item.
 
@@ -258,4 +276,4 @@ class AdjudicationResult:
     status: LineItemStatus
     amount_allowed: Decimal
     denial_reason: Optional[str] = None
-    explanation: tuple[str, ...] = ()
+    explanation: DecisionExplanation = None  # type: ignore[assignment]
