@@ -17,6 +17,7 @@ After all line items: derive claim-level status from outcomes.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
 
@@ -113,8 +114,7 @@ def adjudicate_line_item(
             )
             if payable == 0:
                 steps.append(
-                    "Entire amount applied to deductible — plan pays {_fmt(Decimal('0'))}"
-                    .replace("{_fmt(Decimal('0'))}", _fmt(Decimal("0")))
+                    f"Entire amount applied to deductible — plan pays {_fmt(Decimal('0'))}"
                 )
                 return AdjudicationResult(
                     line_item_id=line_item.id,
@@ -242,3 +242,56 @@ def adjudicate_claim(
     claim.transition_to(derived)
 
     return results
+
+
+# ---------------------------------------------------------------------------
+# Benefit summary
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class BenefitBalance:
+    """Remaining balance for one service type or the deductible."""
+    label: str
+    limit: Decimal
+    used: Decimal
+    remaining: Decimal
+
+
+def get_benefit_summary(
+    policy: Policy,
+    coverage_rules: list[CoverageRule],
+    accumulators: dict[Optional[ServiceType], Accumulator],
+) -> list[BenefitBalance]:
+    """Return a snapshot of remaining benefits: deductible + per-service limits.
+
+    Useful for answering "how much of my lab benefit is left this year?"
+    without running a full adjudication.
+    """
+    balances: list[BenefitBalance] = []
+
+    # Deductible
+    ded_acc = accumulators.get(None)
+    ded_used = ded_acc.amount_used if ded_acc else Decimal("0")
+    if policy.annual_deductible > 0:
+        balances.append(BenefitBalance(
+            label="Annual deductible",
+            limit=policy.annual_deductible,
+            used=ded_used,
+            remaining=max(Decimal("0"), policy.annual_deductible - ded_used),
+        ))
+
+    # Per-service-type limits
+    for rule in coverage_rules:
+        if rule.annual_limit <= 0 or not rule.is_covered:
+            continue
+        svc_acc = accumulators.get(rule.service_type)
+        svc_used = svc_acc.amount_used if svc_acc else Decimal("0")
+        balances.append(BenefitBalance(
+            label=rule.service_type.value,
+            limit=rule.annual_limit,
+            used=svc_used,
+            remaining=max(Decimal("0"), rule.annual_limit - svc_used),
+        ))
+
+    return balances

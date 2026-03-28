@@ -13,4 +13,9 @@ from app.domain.entities import (  # noqa: F401
     Member,
     Policy,
 )
-from app.domain.adjudication import adjudicate_claim, adjudicate_line_item  # noqa: F401
+from app.domain.adjudication import (  # noqa: F401
+    BenefitBalance,
+    adjudicate_claim,
+    adjudicate_line_item,
+    get_benefit_summary,
+)
