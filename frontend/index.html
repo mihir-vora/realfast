@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Claims Processing System</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="shell">
+
+    <!-- Header -->
+    <header>
+      <h1>Claims Processing System</h1>
+      <span class="badge">v0.1</span>
+    </header>
+
+    <!-- Top row: Member + Benefits side by side -->
+    <div class="grid-2">
+      <div class="card">
+        <h2><span class="icon">👤</span> Member & Policy</h2>
+        <div id="member-info"><span class="spinner"></span> Loading...</div>
+      </div>
+      <div class="card">
+        <h2><span class="icon">📊</span> Benefit Balances</h2>
+        <div id="benefits-list"><span class="spinner"></span> Loading...</div>
+      </div>
+    </div>
+
+    <!-- Submit Claim -->
+    <div class="card">
+      <h2><span class="icon">📋</span> Submit New Claim</h2>
+      <form id="claim-form">
+        <div class="form-row">
+          <div class="form-group">
+            <label>Provider</label>
+            <input type="text" id="provider" placeholder="City Medical Center" required>
+          </div>
+          <div class="form-group">
+            <label>Diagnosis Code</label>
+            <input type="text" id="diagnosis" placeholder="J06.9" required>
+          </div>
+        </div>
+
+        <div style="display:flex;justify-content:space-between;align-items:center;margin:12px 0 4px">
+          <label style="font-size:.85rem;font-weight:600">Line Items</label>
+          <button type="button" class="btn btn-outline btn-sm" id="add-line-item">+ Add Item</button>
+        </div>
+        <div id="line-items-container" class="line-items-list"></div>
+
+        <button type="submit" class="btn btn-primary" id="submit-btn">Submit Claim</button>
+      </form>
+    </div>
+
+    <!-- Claims Table -->
+    <div class="card">
+      <h2><span class="icon">📁</span> Claims</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Provider</th>
+            <th>Items</th>
+            <th>Total</th>
+            <th>Status</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="claims-tbody">
+          <tr><td colspan="6" class="empty"><span class="spinner"></span> Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <!-- Detail / Adjudication Panel -->
+    <div class="detail-panel" id="detail-panel" style="display:none"></div>
+
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

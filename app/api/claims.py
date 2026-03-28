@@ -29,7 +29,7 @@ from app.services.claims import (
 router = APIRouter(prefix="/claims", tags=["claims"])
 
 
-def _to_response(claim) -> ClaimResponse:
+def _to_response(claim, include_line_items: bool = True) -> ClaimResponse:
     return ClaimResponse(
         id=claim.id,
         member_id=claim.member_id,
@@ -113,3 +113,21 @@ def adjudicate_claim(
             for li in outcome.claim.line_items
         ],
     )
+
+
+@router.get("", response_model=list[ClaimResponse])
+def list_claims(db: Session = Depends(get_db)):
+    """Return all claims, most recent first."""
+    from app.repositories import repository
+    claims = repository.get_all_claims(db)
+    return [_to_response(c) for c in claims]
+
+
+@router.get("/{claim_id}", response_model=ClaimResponse)
+def get_claim(claim_id: str, db: Session = Depends(get_db)):
+    """Return a single claim by ID."""
+    from app.repositories import repository
+    claim = repository.get_claim(db, claim_id)
+    if claim is None:
+        raise HTTPException(status_code=404, detail=f"Claim '{claim_id}' not found")
+    return _to_response(claim)

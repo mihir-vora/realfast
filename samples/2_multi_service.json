@@ -1,0 +1,23 @@
+{
+  "member_id": "m-jane-smith",
+  "provider": "Metro Hospital",
+  "diagnosis_code": "M54.5",
+  "line_items": [
+    {
+      "service_type": "OFFICE_VISIT",
+      "service_date": "2026-03-20",
+      "amount_charged": "200.00"
+    },
+    {
+      "service_type": "LAB_WORK",
+      "service_date": "2026-03-20",
+      "amount_charged": "450.00"
+    },
+    {
+      "service_type": "IMAGING",
+      "service_date": "2026-03-21",
+      "amount_charged": "800.00"
+    }
+  ]
+}
+
