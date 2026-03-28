@@ -9,8 +9,21 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.db.base import get_db
-from app.schemas.claims import ClaimResponse, ClaimSubmitRequest, LineItemResponse
-from app.services.claims import MemberNotFoundError, PolicyNotFoundError, submit_claim
+from app.schemas.claims import (
+    AdjudicatedLineItemResponse,
+    AdjudicationResponse,
+    ClaimResponse,
+    ClaimSubmitRequest,
+    LineItemResponse,
+)
+from app.services.claims import (
+    ClaimNotAdjudicableError,
+    ClaimNotFoundError,
+    MemberNotFoundError,
+    PolicyNotFoundError,
+    adjudicate_existing_claim,
+    submit_claim,
+)
 
 router = APIRouter(prefix="/claims", tags=["claims"])
 
@@ -52,3 +65,44 @@ def create_claim(
     except PolicyNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     return _to_response(claim)
+
+
+@router.post("/{claim_id}/adjudicate", response_model=AdjudicationResponse)
+def adjudicate_claim(
+    claim_id: str,
+    db: Session = Depends(get_db),
+):
+    """Run adjudication on a submitted claim."""
+    try:
+        outcome = adjudicate_existing_claim(db, claim_id)
+    except ClaimNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ClaimNotAdjudicableError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except PolicyNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+    results_by_id = {r.line_item_id: r for r in outcome.results}
+
+    return AdjudicationResponse(
+        claim_id=outcome.claim.id,
+        status=outcome.claim.status.value,
+        provider=outcome.claim.provider,
+        diagnosis_code=outcome.claim.diagnosis_code,
+        total_charged=outcome.total_charged,
+        total_approved=outcome.total_approved,
+        total_denied=outcome.total_denied,
+        line_items=[
+            AdjudicatedLineItemResponse(
+                id=li.id,
+                service_type=li.service_type.value,
+                service_date=li.service_date,
+                amount_charged=li.amount_charged,
+                amount_allowed=li.amount_allowed,
+                status=li.status.value,
+                denial_reason=li.denial_reason,
+                explanation=list(results_by_id[li.id].explanation),
+            )
+            for li in outcome.claim.line_items
+        ],
+    )

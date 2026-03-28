@@ -57,3 +57,30 @@ class ClaimResponse(BaseModel):
     diagnosis_code: str
     submitted_at: datetime
     line_items: list[LineItemResponse]
+
+
+# ---------------------------------------------------------------------------
+# Adjudication response
+# ---------------------------------------------------------------------------
+
+
+class AdjudicatedLineItemResponse(BaseModel):
+    id: str
+    service_type: str
+    service_date: date
+    amount_charged: Decimal
+    amount_allowed: Decimal
+    status: str
+    denial_reason: str | None = None
+    explanation: list[str]
+
+
+class AdjudicationResponse(BaseModel):
+    claim_id: str
+    status: str
+    provider: str
+    diagnosis_code: str
+    total_charged: Decimal
+    total_approved: Decimal
+    total_denied: Decimal
+    line_items: list[AdjudicatedLineItemResponse]

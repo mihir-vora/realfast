@@ -1,5 +1,5 @@
 """
-Integration tests for POST /claims.
+Integration tests for claim submission and adjudication APIs.
 
 Uses an in-memory SQLite database so tests are isolated and fast.
 Each test gets a fresh database with seed data.
@@ -165,3 +165,144 @@ class TestClaimValidation:
         }
         resp = client.post("/claims", json=payload)
         assert resp.status_code == 422
+
+
+# ===================================================================
+# Adjudication endpoint
+# ===================================================================
+
+
+def _submit(client, payload=None):
+    """Helper: submit a claim and return its id."""
+    resp = client.post("/claims", json=payload or VALID_CLAIM)
+    assert resp.status_code == 201
+    return resp.json()["id"]
+
+
+class TestAdjudicationHappyPath:
+    def test_adjudicate_returns_200(self, client):
+        claim_id = _submit(client)
+        resp = client.post(f"/claims/{claim_id}/adjudicate")
+        assert resp.status_code == 200
+
+    def test_fully_approved_claim(self, client):
+        """A covered line item that exceeds the deductible → APPROVED with payment."""
+        payload = {
+            "member_id": MEMBER_ID,
+            "provider": "Dr. Patel",
+            "diagnosis_code": "J06.9",
+            "line_items": [
+                {"service_type": "LAB_WORK", "service_date": "2026-03-15", "amount_charged": "800.00"},
+            ],
+        }
+        claim_id = _submit(client, payload)
+        resp = client.post(f"/claims/{claim_id}/adjudicate")
+        data = resp.json()
+
+        assert data["status"] == "APPROVED"
+        assert data["claim_id"] == claim_id
+        assert float(data["total_charged"]) == 800.0
+        # $800 - $500 deductible = $300 * 80% coinsurance = $240
+        assert float(data["total_approved"]) == 240.0
+        assert len(data["line_items"]) == 1
+        assert data["line_items"][0]["status"] == "APPROVED"
+        assert len(data["line_items"][0]["explanation"]) > 0
+
+    def test_fully_denied_claim(self, client):
+        """A service type with no coverage rule → all items denied."""
+        from app.db.models import CoverageRuleModel
+        from app.db.seed import POLICY_ID
+
+        payload = {
+            "member_id": MEMBER_ID,
+            "provider": "Unknown Clinic",
+            "diagnosis_code": "Z99.9",
+            "line_items": [
+                {"service_type": "OFFICE_VISIT", "service_date": "2026-03-15", "amount_charged": "200.00"},
+            ],
+        }
+        claim_id = _submit(client, payload)
+
+        from app.db.base import get_db
+        db = next(fastapi_app.dependency_overrides[get_db]())
+        db.query(CoverageRuleModel).filter(
+            CoverageRuleModel.policy_id == POLICY_ID,
+            CoverageRuleModel.service_type == "OFFICE_VISIT",
+        ).delete()
+        db.commit()
+        db.close()
+
+        resp = client.post(f"/claims/{claim_id}/adjudicate")
+        data = resp.json()
+
+        assert data["status"] == "DENIED"
+        assert float(data["total_approved"]) == 0
+        assert float(data["total_denied"]) == 200.0
+        assert data["line_items"][0]["status"] == "DENIED"
+
+    def test_partial_approval(self, client):
+        """Mix of covered and uncovered service types → PARTIAL status."""
+        from app.db.models import CoverageRuleModel
+        from app.db.seed import POLICY_ID
+
+        payload = {
+            "member_id": MEMBER_ID,
+            "provider": "Metro Hospital",
+            "diagnosis_code": "M54.5",
+            "line_items": [
+                {"service_type": "LAB_WORK", "service_date": "2026-03-15", "amount_charged": "800.00"},
+                {"service_type": "IMAGING", "service_date": "2026-03-15", "amount_charged": "400.00"},
+            ],
+        }
+        claim_id = _submit(client, payload)
+
+        from app.db.base import get_db
+        db = next(fastapi_app.dependency_overrides[get_db]())
+        db.query(CoverageRuleModel).filter(
+            CoverageRuleModel.policy_id == POLICY_ID,
+            CoverageRuleModel.service_type == "IMAGING",
+        ).delete()
+        db.commit()
+        db.close()
+
+        resp = client.post(f"/claims/{claim_id}/adjudicate")
+        data = resp.json()
+
+        assert data["status"] == "PARTIAL"
+        # LAB_WORK: $800 - $500 ded = $300 * 80% = $240
+        assert float(data["total_approved"]) == 240.0
+        assert float(data["total_denied"]) == 800.0 + 400.0 - 240.0
+
+        statuses = {li["status"] for li in data["line_items"]}
+        assert statuses == {"APPROVED", "DENIED"}
+
+    def test_response_has_totals_and_explanations(self, client):
+        claim_id = _submit(client)
+        resp = client.post(f"/claims/{claim_id}/adjudicate")
+        data = resp.json()
+
+        assert "total_charged" in data
+        assert "total_approved" in data
+        assert "total_denied" in data
+        assert "provider" in data
+        assert "diagnosis_code" in data
+
+        for li in data["line_items"]:
+            assert "explanation" in li
+            assert isinstance(li["explanation"], list)
+
+
+class TestAdjudicationErrors:
+    def test_claim_not_found_returns_404(self, client):
+        resp = client.post("/claims/nonexistent/adjudicate")
+        assert resp.status_code == 404
+        assert "not found" in resp.json()["detail"].lower()
+
+    def test_already_adjudicated_returns_409(self, client):
+        claim_id = _submit(client)
+        first = client.post(f"/claims/{claim_id}/adjudicate")
+        assert first.status_code == 200
+
+        second = client.post(f"/claims/{claim_id}/adjudicate")
+        assert second.status_code == 409
+        assert "cannot be adjudicated" in second.json()["detail"].lower()
