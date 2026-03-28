@@ -25,6 +25,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+from app.api.claims import router as claims_router  # noqa: E402
+
+app.include_router(claims_router)
+
 
 @app.get("/health")
 def health_check():
