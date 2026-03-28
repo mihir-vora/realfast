@@ -69,3 +69,10 @@ class LineItemStatus(str, Enum):
     PENDING = "PENDING"
     APPROVED = "APPROVED"
     DENIED = "DENIED"
+
+
+LINE_ITEM_TRANSITIONS: dict[LineItemStatus, set[LineItemStatus]] = {
+    LineItemStatus.PENDING: {LineItemStatus.APPROVED, LineItemStatus.DENIED},
+    LineItemStatus.APPROVED: set(),
+    LineItemStatus.DENIED: set(),
+}
