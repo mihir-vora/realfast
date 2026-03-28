@@ -18,16 +18,34 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Optional
 
 from app.domain.enums import (
     CLAIM_TRANSITIONS,
+    LINE_ITEM_TRANSITIONS,
     ClaimStatus,
     LineItemStatus,
     ServiceType,
 )
+
+
+class InvalidTransitionError(Exception):
+    """Raised when a state transition violates the lifecycle rules."""
+
+    def __init__(
+        self, entity: str, from_status: str, to_status: str, allowed: list[str]
+    ):
+        self.entity = entity
+        self.from_status = from_status
+        self.to_status = to_status
+        self.allowed = allowed
+        detail = ", ".join(allowed) if allowed else "none (terminal state)"
+        super().__init__(
+            f"{entity}: cannot transition from {from_status} to {to_status}. "
+            f"Allowed: [{detail}]"
+        )
 
 
 def _new_id() -> str:
@@ -35,7 +53,7 @@ def _new_id() -> str:
 
 
 def _now() -> datetime:
-    return datetime.utcnow()
+    return datetime.now(UTC)
 
 
 # ---------------------------------------------------------------------------
@@ -107,16 +125,22 @@ class Claim:
     submitted_at: datetime = field(default_factory=_now)
     updated_at: datetime = field(default_factory=_now)
 
+    def can_transition_to(self, new_status: ClaimStatus) -> bool:
+        """Check whether a transition is valid without performing it."""
+        return new_status in CLAIM_TRANSITIONS.get(self.status, set())
+
     def transition_to(self, new_status: ClaimStatus) -> None:
         """Move the claim to a new state, enforcing the state machine.
 
-        Raises ValueError if the transition is not allowed.
+        Raises InvalidTransitionError if the transition is not allowed.
         """
-        allowed = CLAIM_TRANSITIONS.get(self.status, set())
-        if new_status not in allowed:
-            raise ValueError(
-                f"Cannot transition from {self.status.value} to {new_status.value}. "
-                f"Allowed: {sorted(s.value for s in allowed) or 'none (terminal state)'}"
+        if not self.can_transition_to(new_status):
+            allowed = CLAIM_TRANSITIONS.get(self.status, set())
+            raise InvalidTransitionError(
+                entity="Claim",
+                from_status=self.status.value,
+                to_status=new_status.value,
+                allowed=[s.value for s in sorted(allowed, key=lambda s: s.value)],
             )
         self.status = new_status
         self.updated_at = _now()
@@ -159,6 +183,35 @@ class ClaimLineItem:
     status: LineItemStatus = LineItemStatus.PENDING
     denial_reason: Optional[str] = None
     id: str = field(default_factory=_new_id)
+
+    def can_transition_to(self, new_status: LineItemStatus) -> bool:
+        """Check whether a transition is valid without performing it."""
+        return new_status in LINE_ITEM_TRANSITIONS.get(self.status, set())
+
+    def transition_to(self, new_status: LineItemStatus) -> None:
+        """Move the line item to a new state, enforcing the state machine.
+
+        Raises InvalidTransitionError if the transition is not allowed.
+        """
+        if not self.can_transition_to(new_status):
+            allowed = LINE_ITEM_TRANSITIONS.get(self.status, set())
+            raise InvalidTransitionError(
+                entity="ClaimLineItem",
+                from_status=self.status.value,
+                to_status=new_status.value,
+                allowed=[s.value for s in sorted(allowed, key=lambda s: s.value)],
+            )
+        self.status = new_status
+
+    def approve(self, amount_allowed: Decimal) -> None:
+        """Convenience: mark this line item as approved with a payout amount."""
+        self.transition_to(LineItemStatus.APPROVED)
+        self.amount_allowed = amount_allowed
+
+    def deny(self, reason: str) -> None:
+        """Convenience: mark this line item as denied with an explanation."""
+        self.transition_to(LineItemStatus.DENIED)
+        self.denial_reason = reason
 
 
 @dataclass
