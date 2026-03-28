@@ -91,6 +91,7 @@ tests/
 docs/
   domain-model.md          # Entities, relationships, state machines
   decisions.md             # Trade-offs and assumptions
+  self-review.md           # Honest assessment of the code
 ```
 
 ## Running Tests
@@ -110,6 +111,59 @@ pytest -v
 | Frontend | Vanilla HTML/CSS/JS | No build step, no node_modules, serves from FastAPI |
 | Tests | pytest | Industry standard, simple to run |
 
+## Demo Walkthrough
+
+After starting the app, try this sequence to see the system in action:
+
+### Via the Frontend (http://localhost:8000)
+
+1. **See the member** — Jane Smith's policy and benefit balances load automatically
+2. **Submit a claim** — Provider: "City Medical Center", Diagnosis: "J06.9"
+   - Add a line item: Office Visit, today's date, $200
+   - Add another: Lab Work, today's date, $350
+   - Click Submit
+3. **Adjudicate** — Click the "Adjudicate" button on the new claim
+4. **Read the explanations** — The panel shows:
+   - The $200 office visit was fully absorbed by the $500 deductible
+   - $300 of the $350 lab charge went to deductible, then 80% coinsurance on the remaining $50 = $40 plan payout
+5. **Check benefit bars** — Deductible bar shows $500/$500 used, Lab Work shows $40/$1000 used
+6. **Submit another claim** — Now the deductible is met, so the plan pays its coinsurance share from dollar one
+
+### Via the API (http://localhost:8000/docs)
+
+```bash
+# Submit a claim
+curl -X POST http://localhost:8000/claims \
+  -H "Content-Type: application/json" \
+  -d '{
+    "member_id": "m-jane-smith",
+    "provider": "Downtown Clinic",
+    "diagnosis_code": "M54.5",
+    "line_items": [
+      {"service_type": "SPECIALIST", "service_date": "2026-03-28", "amount_charged": 500}
+    ]
+  }'
+
+# Copy the claim ID from the response, then adjudicate
+curl -X POST http://localhost:8000/claims/{claim_id}/adjudicate
+
+# Check remaining benefits
+curl http://localhost:8000/members/m-jane-smith
+```
+
+### Resetting the database
+
+Delete `claims.db` and restart the server. The database is re-created with fresh seed data.
+
+```bash
+# Windows
+del claims.db
+# macOS / Linux
+rm claims.db
+
+uvicorn app.main:app --reload
+```
+
 ## How It Works
 
 1. **Submit a claim** — POST to `/claims` with a member ID, provider, diagnosis code, and line items (service type + amount)
@@ -122,6 +176,14 @@ pytest -v
    - Annual limit check (has the yearly maximum been reached?)
 4. Each decision comes with a **member-friendly explanation** and a **rule trace** for internal review
 5. The claim-level status is derived from line item outcomes: all approved = APPROVED, all denied = DENIED, mixed = PARTIAL
+
+## Documentation
+
+| Doc | What |
+|-----|------|
+| [docs/domain-model.md](docs/domain-model.md) | Entities, relationships, state machines, adjudication pipeline |
+| [docs/decisions.md](docs/decisions.md) | What I built, what I skipped, and why |
+| [docs/self-review.md](docs/self-review.md) | Honest assessment — what's good, what's rough |
 
 ## Requirements
 

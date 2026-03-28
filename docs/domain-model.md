@@ -20,41 +20,41 @@ Policy ──1:N──► Accumulator  (one per service type per plan year)
 
 The insured person.
 
-| Field      | Type   | Notes                    |
-|------------|--------|--------------------------|
-| id         | UUID   | primary key              |
-| name       | string |                          |
-| created_at | datetime |                        |
+| Field      | Type     | Notes       |
+|------------|----------|-------------|
+| id         | str/UUID | primary key |
+| name       | string   |             |
+| created_at | datetime |             |
 
-A member can hold multiple policies (e.g. switched plans mid-year), but for this assignment a member has **one active policy**.
+A member can hold multiple policies (e.g. switched plans mid-year), but in this implementation a member has **one active policy**. The system assumes the first policy found is the active one.
 
 ### Policy
 
 The insurance plan a member is enrolled in.
 
-| Field          | Type     | Notes                              |
-|----------------|----------|------------------------------------|
-| id             | UUID     | primary key                        |
-| member_id      | FK       | belongs to one member              |
-| policy_number  | string   | human-readable identifier          |
-| effective_date | date     | coverage start                     |
-| end_date       | date     | coverage end                       |
-| annual_deductible | decimal | total deductible before plan pays |
-| created_at     | datetime |                                    |
+| Field             | Type    | Notes                              |
+|-------------------|---------|------------------------------------|
+| id                | str/UUID| primary key                        |
+| member_id         | FK      | belongs to one member              |
+| policy_number     | string  | human-readable identifier (unique) |
+| effective_date    | date    | coverage start                     |
+| end_date          | date    | coverage end                       |
+| annual_deductible | decimal | member pays this before plan kicks in |
+| created_at        | datetime|                                    |
 
 ### CoverageRule
 
-A single rule within a policy that defines coverage for one service type. This is the **rules-as-data** approach: rules are rows in the database, not if-else branches in code.
+A single rule within a policy that defines coverage for one service type.
 
-| Field               | Type    | Notes                                         |
-|---------------------|---------|-----------------------------------------------|
-| id                  | UUID    | primary key                                   |
-| policy_id           | FK      | belongs to one policy                         |
-| service_type        | enum    | which service this rule covers                |
-| is_covered          | bool    | false = explicitly excluded                   |
-| coinsurance_rate    | decimal | plan pays this fraction (e.g. 0.80 = 80%)    |
-| annual_limit        | decimal | max plan payout per year for this service     |
-| per_visit_limit     | decimal | max plan payout per single visit (nullable)   |
+| Field            | Type    | Notes                                       |
+|------------------|---------|---------------------------------------------|
+| id               | str/UUID| primary key                                 |
+| policy_id        | FK      | belongs to one policy                       |
+| service_type     | enum    | which service this rule covers              |
+| is_covered       | bool    | false = explicitly excluded                 |
+| coinsurance_rate | decimal | plan pays this fraction (e.g. 0.80 = 80%)  |
+| annual_limit     | decimal | max plan payout per year (0 = unlimited)    |
+| per_visit_limit  | decimal | max plan payout per visit (nullable)        |
 
 **Why rules-as-data?** Each rule is a row. The adjudication engine iterates rules and applies them uniformly. Adding a new service type means adding a row, not changing code. Easy to test, easy to explain.
 
@@ -62,60 +62,84 @@ A single rule within a policy that defines coverage for one service type. This i
 
 A reimbursement request submitted by a member.
 
-| Field        | Type     | Notes                                  |
-|--------------|----------|----------------------------------------|
-| id           | UUID     | primary key                            |
-| member_id    | FK       | who submitted it                       |
-| policy_id    | FK       | which policy to adjudicate against     |
-| status       | enum     | lifecycle state (see state machine)    |
-| provider     | string   | doctor / facility name                 |
-| diagnosis_code | string | ICD-style code (simplified)            |
-| submitted_at | datetime |                                        |
-| updated_at   | datetime |                                        |
+| Field          | Type     | Notes                               |
+|----------------|----------|---------------------------------------|
+| id             | str/UUID | primary key                          |
+| member_id      | FK       | who submitted it                     |
+| policy_id      | FK       | which policy to adjudicate against   |
+| status         | enum     | lifecycle state (see state machine)  |
+| provider       | string   | doctor / facility name               |
+| diagnosis_code | string   | ICD-style code (stored, not validated)|
+| submitted_at   | datetime |                                       |
+| updated_at     | datetime |                                       |
 
 ### ClaimLineItem
 
 One billable service within a claim. Each line item is adjudicated independently.
 
-| Field              | Type    | Notes                                      |
-|--------------------|---------|--------------------------------------------|
-| id                 | UUID    | primary key                                |
-| claim_id           | FK      | belongs to one claim                       |
-| service_type       | enum    | maps to a CoverageRule                     |
-| service_date       | date    | when service was rendered                  |
-| amount_charged     | decimal | what the provider billed                   |
-| amount_allowed     | decimal | system-computed: what the plan pays        |
-| status             | enum    | line-item lifecycle state                  |
-| denial_reason      | string  | human-readable explanation (nullable)      |
+| Field          | Type    | Notes                                    |
+|----------------|---------|------------------------------------------|
+| id             | str/UUID| primary key                              |
+| claim_id       | FK      | belongs to one claim                     |
+| service_type   | enum    | maps to a CoverageRule                   |
+| service_date   | date    | when service was rendered                |
+| amount_charged | decimal | what the provider billed                 |
+| amount_allowed | decimal | what the plan pays (set by adjudication) |
+| status         | enum    | PENDING / APPROVED / DENIED              |
+| denial_reason  | string  | human-readable (nullable)                |
 
 ### Accumulator
 
-Tracks how much of a member's limits and deductibles have been consumed in a plan year. Without this, the system can't answer "how much of the $500 lab limit have you already used?"
+Tracks how much of a member's limits and deductibles have been consumed in a plan year.
 
-| Field           | Type    | Notes                                         |
-|-----------------|---------|-----------------------------------------------|
-| id              | UUID    | primary key                                   |
-| policy_id       | FK      | which policy                                  |
-| service_type    | enum    | which service (or NULL for deductible)        |
-| year            | int     | plan year                                     |
-| amount_used     | decimal | running total of plan payouts / deductible applied |
+| Field        | Type    | Notes                                            |
+|--------------|---------|--------------------------------------------------|
+| id           | str/UUID| primary key                                      |
+| policy_id    | FK      | which policy                                     |
+| service_type | enum    | which service (NULL = deductible tracker)        |
+| year         | int     | plan year                                        |
+| amount_used  | decimal | running total                                    |
 
 One accumulator row per (policy, service_type, year). A separate row with `service_type = NULL` tracks the overall deductible.
+
+### DecisionExplanation (Value Object)
+
+Immutable explanation attached to every adjudication result.
+
+| Field                    | Type          | Notes                              |
+|--------------------------|---------------|--------------------------------------|
+| reason_code              | string        | NOT_COVERED, EXCLUDED, APPROVED, etc.|
+| member_explanation       | string        | plain-English for the insured person |
+| rule_trace               | tuple[str]    | step-by-step processing log          |
+| deductible_applied       | decimal       | how much deductible was consumed     |
+| remaining_annual_benefit | decimal/None  | remaining limit after this decision  |
+
+### AdjudicationResult (Value Object)
+
+Immutable outcome for one line item.
+
+| Field          | Type           | Notes                        |
+|----------------|----------------|------------------------------|
+| line_item_id   | str            | which line item              |
+| status         | LineItemStatus | APPROVED or DENIED           |
+| amount_allowed | decimal        | plan payout                  |
+| denial_reason  | string/None    | if denied                    |
+| explanation    | DecisionExplanation | full breakdown          |
 
 ---
 
 ## Service Types (Enum)
 
-Kept intentionally small to avoid scope creep:
+Six types, kept intentionally small:
 
-```
-OFFICE_VISIT
-LAB_WORK
-IMAGING
-GENERIC_RX
-SPECIALIST
-EMERGENCY
-```
+| Value        | Seed Coverage                                |
+|--------------|----------------------------------------------|
+| OFFICE_VISIT | 80% coinsurance, $2000/yr limit, $150/visit  |
+| LAB_WORK     | 80%, $1000/yr, no per-visit cap              |
+| IMAGING      | 70%, $1500/yr, $500/visit                    |
+| GENERIC_RX   | 90%, unlimited annual, $50/visit             |
+| SPECIALIST   | 60%, $3000/yr, no per-visit cap              |
+| EMERGENCY    | 80%, $10000/yr, no per-visit cap             |
 
 ---
 
@@ -124,117 +148,71 @@ EMERGENCY
 ### Claim Status
 
 ```
-SUBMITTED ──► PROCESSING ──┬──► APPROVED
-                           ├──► DENIED
-                           └──► PARTIAL
-APPROVED ──► PAID
-PARTIAL  ──► PAID
-DENIED   ──  (terminal)
+SUBMITTED ──► PROCESSING ──┬──► APPROVED ──► PAID
+                            ├──► DENIED      (terminal)
+                            └──► PARTIAL  ──► PAID
 ```
 
-| State      | Meaning                                                |
-|------------|--------------------------------------------------------|
-| SUBMITTED  | Received, not yet adjudicated                          |
-| PROCESSING | Adjudication engine is evaluating line items            |
-| APPROVED   | Every line item approved                               |
-| DENIED     | Every line item denied                                 |
-| PARTIAL    | At least one line item approved, at least one denied   |
-| PAID       | Payment issued (from APPROVED or PARTIAL)              |
+| State      | Meaning                                              |
+|------------|------------------------------------------------------|
+| SUBMITTED  | Received, not yet adjudicated                        |
+| PROCESSING | Adjudication engine is evaluating line items          |
+| APPROVED   | Every line item approved                             |
+| DENIED     | Every line item denied                               |
+| PARTIAL    | Mixed — some approved, some denied                   |
+| PAID       | Payment issued (from APPROVED or PARTIAL)            |
 
-**The claim-level status is derived from line item outcomes.** The service layer sets it after adjudicating all line items — it never needs to be set manually.
+The claim-level status is **derived from line item outcomes**, not set independently. This eliminates consistency bugs where the claim says "approved" but a line item says "denied."
+
+Transitions are enforced by `Claim.transition_to()`, which raises `InvalidTransitionError` for illegal moves.
 
 ### Line Item Status
 
 ```
 PENDING ──┬──► APPROVED
-          └──► DENIED
+           └──► DENIED
 ```
 
-Simple and intentional. A line item is either waiting, approved (with an `amount_allowed`), or denied (with a `denial_reason`). No intermediate states — the adjudication engine processes each line item in a single pass.
+No intermediate states. The adjudication engine resolves each line item in a single pass.
 
 ---
 
-## Adjudication Logic (How a Claim Gets Processed)
+## Adjudication Pipeline
 
-When a claim is submitted, the adjudication engine processes each line item through these steps:
+When a claim is adjudicated, each line item passes through this pipeline:
 
 ```
-For each line item:
-  1. Find the CoverageRule for this service_type on the member's policy
-  2. If no rule exists or is_covered = false → DENY ("not covered under this policy")
-  3. Check the policy's annual deductible via the Accumulator
-     - If deductible not yet met → member pays toward deductible first
-  4. Apply coinsurance_rate to the remaining amount
-  5. Apply per_visit_limit (cap the plan's payout per line item)
-  6. Check annual_limit via the Accumulator
-     - If limit would be exceeded → cap payout at remaining limit
-     - If limit already exhausted → DENY ("annual limit reached")
-  7. Update Accumulators
-  8. Set amount_allowed and status = APPROVED (or DENIED if payout is zero)
+1. COVERAGE CHECK     → Is there a CoverageRule for this service_type?
+                         No rule or is_covered=false → DENY with reason
+2. DEDUCTIBLE         → Has the member met their annual deductible?
+                         If not → member pays toward deductible first
+                         If entire amount consumed by deductible → APPROVE at $0
+3. COINSURANCE        → Plan pays its percentage of the remaining amount
+4. PER-VISIT CAP      → Cap the plan's payout at per_visit_limit (if set)
+5. ANNUAL LIMIT CHECK → Would this push past the annual limit?
+                         Limit exhausted → DENY
+                         Would exceed → cap at remaining limit
+6. UPDATE ACCUMULATORS → Record deductible + plan payout in running totals
 ```
 
-After all line items are processed, derive the claim-level status:
-- All APPROVED → claim is APPROVED
-- All DENIED → claim is DENIED
-- Mixed → claim is PARTIAL
+After all line items: derive claim-level status from outcomes.
 
-### Decision Explanations
-
-Every adjudication decision is explainable. The `denial_reason` field on each line item stores a human-readable string like:
-
-- `"Service type IMAGING is not covered under this policy"`
-- `"Annual limit of $500.00 for LAB_WORK exhausted ($500.00 of $500.00 used)"`
-- `"Amount reduced from $200.00 to $150.00: per-visit limit applied"`
-
-For approved items, the difference between `amount_charged` and `amount_allowed` is itself the explanation (coinsurance, deductible, caps). We don't need a separate explanation field for approvals — the numbers tell the story.
-
----
-
-## How Annual Limits and Deductibles Work
-
-### Deductible
-
-The member pays out-of-pocket until the deductible is met, then the plan starts paying its share.
-
-- Tracked in the Accumulator as a row with `service_type = NULL`
-- During adjudication, the engine checks `accumulator.amount_used < policy.annual_deductible`
-- Any remaining deductible is subtracted from the billable amount before coinsurance applies
-
-### Annual Limits
-
-Per-service-type caps on how much the plan will pay in a year.
-
-- Tracked in the Accumulator as a row with the specific `service_type`
-- If a payout would push `amount_used` past the `annual_limit`, the payout is capped
-- If the limit is already exhausted, the line item is denied
-
-Both are updated atomically when a claim is adjudicated — not after payment. This prevents over-commitment if two claims are submitted close together.
+**Accumulator ordering matters.** Line item N sees the effect of items 1..N-1 within the same claim. If two lab items share a $1000 annual limit, the second one sees the first one's payout already deducted.
 
 ---
 
 ## Assumptions
 
-1. **One active policy per member.** Real systems have coordination of benefits across multiple plans. Out of scope.
-2. **Adjudication is synchronous.** Submit a claim, get a result. No async queues or manual review steps.
-3. **No provider networks.** We don't distinguish in-network vs. out-of-network pricing.
-4. **No pre-authorization.** Some services require pre-approval. Skipped for simplicity.
-5. **Diagnosis codes are pass-through.** We store them but don't validate against a real ICD codebook.
-6. **No authentication/authorization.** The API is open. A real system would have role-based access.
-7. **Currency is USD, stored as decimal.** No multi-currency support.
-8. **Plan year = calendar year.** No fiscal year or enrollment-period complexity.
-9. **No retroactive policy changes.** Once a policy is created, its rules don't change.
-
----
-
-## Intentionally Skipped Complexity
-
-| Feature | Why Skipped |
-|---------|-------------|
-| Appeals / disputes | Noted as future extension in the assignment. The model supports it — add an `Appeal` entity linked to a ClaimLineItem. |
-| Eligibility verification | Also noted as future extension. Would add a check before adjudication: "is this member active on this date?" |
-| Explanation of Benefits (EOB) | A formatted document sent to the member. Nice-to-have, but the raw data is already on the line items. |
-| Concurrent claim protection | Real systems lock accumulators to prevent race conditions. SQLite's write-lock gives us basic protection for free. |
-| Claim amendments | Once submitted, a claim can't be edited. Members would submit a new claim. |
+1. **One active policy per member.** No coordination of benefits across multiple plans.
+2. **Adjudication is synchronous.** Submit a claim, get a result. No async queues or manual review.
+3. **No provider networks.** No in-network vs. out-of-network distinction.
+4. **No pre-authorization.** Some services require pre-approval in reality. Skipped.
+5. **Diagnosis codes are pass-through.** Stored but not validated against ICD-10.
+6. **No authentication.** The API is open.
+7. **Currency is USD, stored as Decimal.** No multi-currency.
+8. **Plan year = calendar year.** No fiscal year complexity.
+9. **No retroactive policy changes.** Rules are static once created.
+10. **Submission and adjudication are separate steps.** The frontend submits first, then adjudicates. This makes the two-step process visible.
 
 ---
 
@@ -242,7 +220,17 @@ Both are updated atomically when a claim is adjudicated — not after payment. T
 
 The model is designed to accommodate these without restructuring:
 
-- **Appeals:** Add an `Appeal` entity with FK to `ClaimLineItem`, its own state machine (FILED → UNDER_REVIEW → UPHELD / OVERTURNED), and the ability to re-adjudicate.
-- **Eligibility:** Add a check in the adjudication pipeline: verify `policy.effective_date <= service_date <= policy.end_date` and member enrollment status.
-- **New service types:** Add an enum value and a CoverageRule row. No code changes to the adjudication engine.
-- **Tiered coinsurance:** The CoverageRule could gain a `tier` field or be split into a separate table for complex cost-sharing schedules.
+### Appeals Workflow (likely pairing session extension)
+Add an `Appeal` entity with FK to `ClaimLineItem`. Own state machine: `FILED → UNDER_REVIEW → UPHELD / OVERTURNED`. An overturned appeal re-runs adjudication on that line item. The `DecisionExplanation` already captures enough context for an appeals reviewer to understand the original decision.
+
+### Eligibility Verification (likely pairing session extension)
+Add a check in the adjudication pipeline before step 1: verify `policy.effective_date <= service_date <= policy.end_date` and that the member's enrollment is active. The `Policy` entity already has the date fields — this is a guard clause, not a schema change.
+
+### New Service Types
+Add an enum value and a CoverageRule row. Zero code changes to the adjudication engine.
+
+### Tiered Coinsurance
+The CoverageRule could gain a `tier` field or be split into a separate table for plans where coinsurance changes after a spending threshold.
+
+### Claim Amendments / Resubmission
+Currently claims are immutable after submission. An amendment workflow would create a new claim linked to the original, with a `supersedes` FK.
